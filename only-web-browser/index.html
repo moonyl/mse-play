@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>MSE Video Player - Fixed</title>
+</head>
+<body>
+    <input type="file" id="fileInput" accept="video/mp4">
+    <video id="videoPlayer" controls></video>
+    <div id="errorMessage"></div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const video = document.getElementById('videoPlayer');
+        const errorDiv = document.getElementById('errorMessage');
+        let mediaSource = null;
+        let sourceBuffer = null;
+
+        fileInput.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // 에러 메시지 초기화
+            errorDiv.textContent = '';
+
+            // 코덱 지원 확인 (예시: H.264, AAC)
+            const mimeType = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+            if (!MediaSource.isTypeSupported(mimeType)) {
+                errorDiv.textContent = '지원되지 않는 코덱입니다. 파일을 확인하세요.';
+                return;
+            }
+
+            // 기존 MediaSource 정리
+            if (mediaSource) {
+                mediaSource.endOfStream();
+                URL.revokeObjectURL(video.src);
+                if (sourceBuffer) sourceBuffer = null;
+            }
+
+            // 새로운 MediaSource 초기화
+            mediaSource = new MediaSource();
+            video.src = URL.createObjectURL(mediaSource);
+
+            // 비디오 에러 핸들링
+            video.addEventListener('error', (e) => {
+                const errorCode = video.error ? video.error.code : '알 수 없는 에러';
+                errorDiv.textContent = `비디오 에러 발생: ${errorCode} - 파일이 손상되었거나 코덱이 지원되지 않을 수 있습니다.`;
+                console.error('Video error:', video.error);
+                if (mediaSource) mediaSource.endOfStream();
+            });
+
+            mediaSource.addEventListener('sourceopen', async () => {
+                if (sourceBuffer) return;
+
+                try {
+                    sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+                } catch (error) {
+                    errorDiv.textContent = 'SourceBuffer 생성 실패: ' + error.message;
+                    console.error('SourceBuffer 추가 실패:', error);
+                    return;
+                }
+
+                // 파일을 청크로 읽어 버퍼에 추가
+                const stream = file.stream();
+                const reader = stream.getReader();
+
+                const appendChunk = async () => {
+                    if (!sourceBuffer || video.error) {
+                        console.error('SourceBuffer가 null이거나 비디오에 에러가 있습니다.');
+                        return;
+                    }
+
+                    try {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            if (mediaSource && mediaSource.readyState === 'open') {
+                                mediaSource.endOfStream();
+                            }
+                            return;
+                        }
+
+                        // 버퍼에 데이터 추가
+                        if (!sourceBuffer.updating) {
+                            sourceBuffer.appendBuffer(value);
+                            sourceBuffer.addEventListener('updateend', appendChunk, { once: true });
+                        } else {
+                            sourceBuffer.addEventListener('updateend', appendChunk, { once: true });
+                        }
+                    } catch (error) {
+                        errorDiv.textContent = '데이터 추가 오류: ' + error.message;
+                        console.error('데이터 추가 오류:', error);
+                    }
+                };
+
+                // 첫 청크 추가 시작
+                appendChunk();
+            });
+
+            mediaSource.addEventListener('error', (e) => {
+                errorDiv.textContent = 'MediaSource 오류 발생.';
+                console.error('MediaSource 오류:', e);
+            });
+        });
+    </script>
+</body>
+</html>
